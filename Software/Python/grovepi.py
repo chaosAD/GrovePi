@@ -237,17 +237,26 @@ def read_i2c_block(no_bytes = max_recv_size):
 	return data
 
 def read_identified_i2c_block(read_command_id, no_bytes):
-	data = [-1]
-	while data[0] != read_command_id[0]:
-		data = read_i2c_block(no_bytes + 1)
+  data = [-1]
+  counter = 0
+  while data[0] != read_command_id[0] and counter < 3:
+      data = read_i2c_block(no_bytes + 1)
+      counter += 1
+  if counter == 3:
+      raise IOError("[Errno 5] Input/output error")    
+  return data[1:]
 
-	return data[1:]
 
 # Arduino Digital Read
 def digitalRead(pin):
-	write_i2c_block(dRead_cmd + [pin, unused, unused])
-	data = read_identified_i2c_block( dRead_cmd, no_bytes = 1)[0]
-	return data
+  while True:
+    write_i2c_block(dRead_cmd + [pin, unused, unused])
+    try:
+      data = read_identified_i2c_block( dRead_cmd, no_bytes = 1)[0]
+    except:
+      continue
+    break
+  return data
 
 # Arduino Digital Write
 def digitalWrite(pin, value):
@@ -257,10 +266,14 @@ def digitalWrite(pin, value):
 
 # Read analog value from Pin
 def analogRead(pin):
-	write_i2c_block(aRead_cmd + [pin, unused, unused])
-	number = read_identified_i2c_block(aRead_cmd, no_bytes = 2)
-	return number[0] * 256 + number[1]
-
+  while True:
+      write_i2c_block(aRead_cmd + [pin, unused, unused])
+      try:
+          number = read_identified_i2c_block(aRead_cmd, no_bytes = 2)
+      except:
+          continue
+      break
+  return number[0] * 256 + number[1]
 
 # Write PWM
 def analogWrite(pin, value):
