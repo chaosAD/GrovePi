@@ -206,7 +206,7 @@ def write_i2c_block(block, custom_timing = None):
 	while counter < 3:
 		try:
 			i2c.write_reg_list(reg, data)
-			time.sleep(0.002 + additional_waiting)
+			time.sleep(0.006 + additional_waiting)
 			return
 		except KeyboardInterrupt:
 			raise KeyboardInterrupt
@@ -225,7 +225,7 @@ def read_i2c_block(no_bytes = max_recv_size):
 	while data[0] in [data_not_available_cmd[0], 255] and counter < 3:
 		try:
 			data = i2c.read_list(reg = None, len = no_bytes)
-			time.sleep(0.002 + additional_waiting)
+			time.sleep(0.006 + additional_waiting)
 			if counter > 0:
 				counter = 0
 		except KeyboardInterrupt:
@@ -239,6 +239,7 @@ def read_i2c_block(no_bytes = max_recv_size):
 def read_identified_i2c_block(read_command_id, no_bytes):
   data = [-1]
   counter = 0
+  additional_waiting = 0
   while data[0] != read_command_id[0] and counter < 3:
       data = read_i2c_block(no_bytes + 1)
       counter += 1
@@ -250,10 +251,12 @@ def read_identified_i2c_block(read_command_id, no_bytes):
 # Arduino Digital Read
 def digitalRead(pin):
   while True:
+    additional_waiting = 0
     write_i2c_block(dRead_cmd + [pin, unused, unused])
     try:
       data = read_identified_i2c_block( dRead_cmd, no_bytes = 1)[0]
     except:
+      additional_waiting = additional_waiting + 0.002
       continue
     break
   return data
@@ -267,10 +270,12 @@ def digitalWrite(pin, value):
 # Read analog value from Pin
 def analogRead(pin):
   while True:
+      additional_waiting = 0
       write_i2c_block(aRead_cmd + [pin, unused, unused])
       try:
           number = read_identified_i2c_block(aRead_cmd, no_bytes = 2)
       except:
+          additional_waiting = additional_waiting + 0.002
           continue
       break
   return number[0] * 256 + number[1]
@@ -344,10 +349,17 @@ def rtc_getTime():
 
 # Read and return temperature and humidity from Grove DHT Pro
 def dht(pin, module_type):
-	write_i2c_block(dht_temp_cmd + [pin, module_type, unused])
-	number = read_identified_i2c_block(dht_temp_cmd, no_bytes = 8)
+  while True:
+    additional_waiting = 0
+    write_i2c_block(dht_temp_cmd + [pin, module_type, unused])
+    try:
+      number = read_identified_i2c_block(dht_temp_cmd, no_bytes = 8)
+    except:
+      additional_waiting = additional_waiting + 0.002
+      continue
+    break
 
-	if p_version==2:
+  if p_version==2:
 		h=''
 		for element in (number[0:4]):
 			h+=chr(element)
