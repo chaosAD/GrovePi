@@ -313,9 +313,16 @@ def temp(pin, model = '1.0'):
 
 # Read value from Grove Ultrasonic
 def ultrasonicRead(pin):
-  write_i2c_block(uRead_cmd + [pin, unused, unused])
-  number = read_identified_i2c_block(uRead_cmd, no_bytes = 2)
-  return (number[0] * 256 + number[1])
+    while True:
+        additional_waiting = 0
+        write_i2c_block(uRead_cmd + [pin, unused, unused])
+        try:
+          number = read_identified_i2c_block(uRead_cmd, no_bytes = 2)
+        except:
+          additional_waiting = additional_waiting + 0.002
+          continue
+        break
+    return (number[0] * 256 + number[1])
 
 
 # Read the firmware version
