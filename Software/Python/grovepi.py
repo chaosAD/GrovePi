@@ -43,7 +43,7 @@ THE SOFTWARE.
 #       11 Nov 2016   I2C retries added for faster IO
 #             DHT function updated to look for nan's
 
-__version__ = '1.4.1'
+__version__ = '1.4.2'
 
 import sys
 import time
@@ -52,6 +52,11 @@ import struct
 import numpy
 
 import di_i2c
+
+import traceback                         # chaosAD [FOR DEBUGGING]
+
+
+#print("grovepi2")
 
 def set_bus(bus):
   global i2c
@@ -84,6 +89,7 @@ RISING = 3
 unused = 0
 retries = 10
 additional_waiting = 0
+before_read_delay = 0
 
 # Get firmware version
 version_cmd = [8]
@@ -210,7 +216,10 @@ def write_i2c_block(block, custom_timing = None):
       return
     except KeyboardInterrupt:
       raise KeyboardInterrupt
-    except:
+    except Exception as e:
+#      if isinstance(e, IOError):                     # chaosAD [FOR DEBUGGING]
+#      print('I2C write, {}'.format(e))                # chaosAD [FOR DEBUGGING]
+#      traceback.print_exc()                          # chaosAD [FOR DEBUGGING]
       counter += 1
       time.sleep(0.003)
       continue
@@ -222,44 +231,68 @@ def read_i2c_block(no_bytes = max_recv_size):
   '''
   data = data_not_available_cmd
   counter = 0
+  tries = 0
   while data[0] in [data_not_available_cmd[0], 255] and counter < 3:
     try:
+      time.sleep(before_read_delay)
       data = i2c.read_list(reg = None, len = no_bytes)
+      tries += 1
+#      if data[0] != 23:
+#          print("** data: {}".format(data))
       time.sleep(0.006 + additional_waiting)
-      if counter > 0:
-        counter = 0
+#      if counter > 0:
+      counter = 0
     except KeyboardInterrupt:
       raise KeyboardInterrupt
-    except:
+    except Exception as e:
+#      if isinstance(e, IOError):                      # chaosAD [FOR DEBUGGING]
+#      print('I2C read, {}'.format(e))                  # chaosAD [FOR DEBUGGING]
+#      traceback.print_exc()                           # chaosAD [FOR DEBUGGING]
       counter += 1
-      time.sleep(0.003)
+      time.sleep(0.003 + additional_waiting)
 
+#  print("** num of tries: {}".format(tries))
   return data
 
 def read_identified_i2c_block(read_command_id, no_bytes):
   data = [-1]
   counter = 0
-  additional_waiting = 0
-  while data[0] != read_command_id[0] and counter < 3:
+#  additional_waiting = 0
+  while data[0] != read_command_id[0] and counter < 10:
       data = read_i2c_block(no_bytes + 1)
       counter += 1
-  if counter == 3:
+  if counter == 10:
       raise IOError("[Errno 5] Input/output error")
   return data[1:]
 
+def send_cmd_and_read_data(cmd, data_to_send, bytes_to_read, retries = 5, trn_delay = 0):
+    global before_read_delay
+    if data_to_send == None:
+        data_to_send = []
+    data_len = len(data_to_send)
+    if data_len > 3:
+        raise Exception('Too many bytes to sent. Only allowed a maximum of 3 bytes.')
+    if data_len < 3:
+        data_to_send.extend([unused] * (3 - data_len))
+    counter = 0
+    data = []
+    before_read_delay = trn_delay                # Delay before requesting data
+    while True:
+        write_i2c_block(cmd + data_to_send)
+        try:
+            data = read_identified_i2c_block(cmd, bytes_to_read)
+        except:
+            if counter < retries:
+                counter += 1
+                continue
+            raise
+        break
+    before_read_delay = 0
+    return data
 
 # Arduino Digital Read
 def digitalRead(pin):
-  while True:
-    additional_waiting = 0
-    write_i2c_block(dRead_cmd + [pin, unused, unused])
-    try:
-      data = read_identified_i2c_block( dRead_cmd, no_bytes = 1)[0]
-    except:
-      additional_waiting = additional_waiting + 0.002
-      continue
-    break
-  return data
+    return send_cmd_and_read_data(dRead_cmd, [pin], 1)[0]
 
 # Arduino Digital Write
 def digitalWrite(pin, value):
@@ -269,16 +302,8 @@ def digitalWrite(pin, value):
 
 # Read analog value from Pin
 def analogRead(pin):
-  while True:
-      additional_waiting = 0
-      write_i2c_block(aRead_cmd + [pin, unused, unused])
-      try:
-          number = read_identified_i2c_block(aRead_cmd, no_bytes = 2)
-      except:
-          additional_waiting = additional_waiting + 0.002
-          continue
-      break
-  return number[0] * 256 + number[1]
+    number = send_cmd_and_read_data(aRead_cmd, [pin], 2)
+    return number[0] * 256 + number[1]
 
 # Write PWM
 def analogWrite(pin, value):
@@ -313,31 +338,21 @@ def temp(pin, model = '1.0'):
 
 # Read value from Grove Ultrasonic
 def ultrasonicRead(pin):
-    while True:
-        additional_waiting = 0
-        write_i2c_block(uRead_cmd + [pin, unused, unused])
-        try:
-          number = read_identified_i2c_block(uRead_cmd, no_bytes = 2)
-        except:
-          additional_waiting = additional_waiting + 0.002
-          continue
-        break
+    number = send_cmd_and_read_data(uRead_cmd, [pin], 2)
     return (number[0] * 256 + number[1])
 
 
 # Read the firmware version
 def version():
-  write_i2c_block(version_cmd + [unused, unused, unused])
-  number = read_identified_i2c_block(version_cmd, no_bytes = 3)
-  return "%s.%s.%s" % (number[0], number[1], number[2])
+    number = send_cmd_and_read_data(version_cmd, None, 3)
+    return "%s.%s.%s" % (number[0], number[1], number[2])
 
 
 # Read Grove Accelerometer (+/- 1.5g) XYZ value
 # Need to investigate why this reports what was read with the previous command
 # Doesn't look to be implemented on the GrovePi
 def acc_xyz():
-  write_i2c_block(acc_xyz_cmd + [unused, unused, unused])
-  number = read_identified_i2c_block(acc_xyz_cmd, no_bytes = 3)
+  number = send_cmd_and_read_data(acc_xyz_cmd, None, 3)
   if number[1] > 32:
     number[1] = - (number[1] - 224)
   if number[2] > 32:
@@ -346,25 +361,14 @@ def acc_xyz():
     number[3] = - (number[3] - 224)
   return (number[0], number[1], number[2])
 
-
 # Read from Grove RTC
 # Doesn't look to be implemented on the GrovePi
 def rtc_getTime():
-  write_i2c_block(rtc_getTime_cmd + [unused, unused, unused])
-  number = read_i2c_block()
-  return number
+  return send_cmd_and_read_data(rtc_getTime_cmd, None, 10)
 
 # Read and return temperature and humidity from Grove DHT Pro
 def dht(pin, module_type):
-  while True:
-    additional_waiting = 0
-    write_i2c_block(dht_temp_cmd + [pin, module_type, unused])
-    try:
-      number = read_identified_i2c_block(dht_temp_cmd, no_bytes = 8)
-    except:
-      additional_waiting = additional_waiting + 0.002
-      continue
-    break
+  number = send_cmd_and_read_data(dht_temp_cmd, [pin, module_type], 8)
 
   if p_version==2:
     h=''
@@ -373,16 +377,16 @@ def dht(pin, module_type):
 
     t_val=struct.unpack('f', h)
     t = round(t_val[0], 2)
-                                     
-                           
+
+
 
     h = ''
     for element in (number[4:8]):
       h+=chr(element)
 
-              
-                                     
-                           
+
+
+
 
     hum_val=struct.unpack('f',h)
     hum = round(hum_val[0], 2)
@@ -398,9 +402,7 @@ def dht(pin, module_type):
 
 # Grove - Infrared Receiver - get the commands received from the Grove IR sensor
 def ir_read_signal():
-  write_i2c_block(ir_read_cmd + [unused, unused, unused])
-  data_back = read_identified_i2c_block(ir_read_cmd, no_bytes = 7)
-
+  data_back = send_cmd_and_read_data(ir_read_cmd, None, 7)
   return (data_back[0],
       data_back[1] + data_back[2] * 256,
       data_back[3] + data_back[4] * 256 + data_back[5] * (256 ** 2) + data_back[6] * (256 ** 3))
@@ -412,9 +414,7 @@ def ir_recv_pin(pin):
 
 # Grove - Infrared Receiver - check if there's any data that hasn't been read so far
 def ir_is_data():
-  write_i2c_block(ir_read_isdata + 3 * [unused])
-  number = read_identified_i2c_block(ir_read_isdata, no_bytes = 1)
-
+  number = send_cmd_and_read_data(ir_read_isdata, None, 1)
   return number[0] != 0
 
 # after a list of numerical values is provided
@@ -485,8 +485,7 @@ def ledBar_setBits(pin, state):
 # Grove LED Bar - get current state
 # state: (0-1023) a bit for each of the 10 LEDs
 def ledBar_getBits(pin):
-  write_i2c_block(ledBarGet_cmd + [pin, unused, unused])
-  block = read_identified_i2c_block(ledBarGet_cmd, no_bytes = 2)
+  block = send_cmd_and_read_data(ledBarGet_cmd, [pin], 2)
   return block[0] ^ (block[1] << 8)
 
 
@@ -647,8 +646,7 @@ def unset_all_interrupts():
   read_i2c_block(no_bytes = 1)
 
 def is_interrupt_active(pin):
-  write_i2c_block(isr_active_cmd + [pin, unused, unused])
-  data = read_identified_i2c_block(isr_active_cmd, no_bytes = 2)
+  data = send_cmd_and_read_data(isr_active_cmd, [pin], 2)
   value  = data[1] >> pin
   return value != 0
 
@@ -659,8 +657,7 @@ def get_active_interrupts():
   pin - D2-D8 pins; if it's 255 return the state of all pins
   '''
   pin = 255
-  write_i2c_block(isr_active_cmd + [pin, unused, unused])
-  data = read_identified_i2c_block(isr_active_cmd, no_bytes = 2)
+  data = send_cmd_and_read_data(isr_active_cmd, [pin], 2)
   value = data[0] + (data[1] << 8)
   active_interrupts = [i for i in range(2 * 8) if ((value >> i) & 0x01)]
   return active_interrupts
@@ -671,8 +668,7 @@ def read_interrupt_state(pin):
 
   pin - D2-D8 pins
   '''
-  write_i2c_block(isr_read_cmd + [pin, unused, unused])
-  data = read_identified_i2c_block(isr_read_cmd, no_bytes = 4)
+  data = send_cmd_and_read_data(isr_read_cmd, [pin], 4)
   value = data[0] + (data[1] << 8) + (data[2] << 16) + (data[3] << 24)
   return value
 
@@ -706,8 +702,7 @@ def encoder_dis(pin = 2):
   read_i2c_block(no_bytes = 1)
 
 def encoderRead(pin = 2):
-  write_i2c_block(encoder_read_cmd + [pin, unused, unused])
-  data = read_identified_i2c_block(encoder_read_cmd, no_bytes = 4)
+  data = send_cmd_and_read_data(encoder_read_cmd, [pin], 4)
   value = data[0] + (data[1] << 8) + (data[2] << 16) + (data[3] << 24)
   return value
 
